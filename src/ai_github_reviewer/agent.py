@@ -3,6 +3,7 @@ from typing import Final, cast
 
 from ai_github_reviewer.github_client import GitHubClient
 from ai_github_reviewer.messages import (
+    build_review_repair_message,
     build_system_message,
     build_tool_result_message,
     build_user_message,
@@ -10,7 +11,7 @@ from ai_github_reviewer.messages import (
 )
 from ai_github_reviewer.model_client import DeepSeekModelClient
 from ai_github_reviewer.pull_request import PullRequestData, PullRequestTarget
-from ai_github_reviewer.review_validation import validate_review
+from ai_github_reviewer.review_validation import ReviewValidationError, validate_review
 from ai_github_reviewer.tool_calls import execute_tool_calls
 from ai_github_reviewer.tool_schema import get_pull_request_tool_schema
 
@@ -24,6 +25,7 @@ _TOOL_RESULT_REQUIRED_ERROR: Final = (
 )
 _REVIEW_CANDIDATE_ERROR: Final = "assistant review must be a non-empty string"
 _TOOL_CALLS_ERROR: Final = "assistant tool_calls must be a list or tuple"
+_REPAIR_TOOL_CALLS_ERROR: Final = "tool calls are not allowed during review repair"
 
 
 class ToolRoundLimitError(RuntimeError):
@@ -35,6 +37,10 @@ class ToolResultRequiredError(RuntimeError):
 
 
 class ReviewCandidateError(RuntimeError):
+    pass
+
+
+class ReviewRepairToolCallError(RuntimeError):
     pass
 
 
@@ -94,14 +100,39 @@ class PullRequestReviewAgent:
             if current_result_snapshot is None:
                 raise ToolResultRequiredError(_TOOL_RESULT_REQUIRED_ERROR)
 
-            candidate = assistant_message.get("content")
-            if type(candidate) is not str or not candidate.strip():
-                raise ReviewCandidateError(_REVIEW_CANDIDATE_ERROR)
-
             changed_filenames = tuple(
                 changed_file.filename for changed_file in current_result_snapshot.changed_files
             )
-            return validate_review(candidate, changed_filenames)
+            candidate = _review_candidate(assistant_message)
+            try:
+                return validate_review(candidate, changed_filenames)
+            except ReviewValidationError:
+                return self._repair_review(
+                    history,
+                    assistant_message,
+                    changed_filenames,
+                )
+
+    def _repair_review(
+        self,
+        history: list[dict[str, object]],
+        invalid_assistant_message: dict[str, object],
+        changed_filenames: tuple[str, ...],
+    ) -> str:
+        history.append(invalid_assistant_message)
+        history.append(build_review_repair_message())
+        response = self._model_client.complete(
+            history,
+            [get_pull_request_tool_schema()],
+        )
+        if isinstance(response, Mapping):
+            _assistant_tool_calls(response)
+        assistant_message = copy_assistant_message(response)
+        if _assistant_tool_calls(assistant_message):
+            raise ReviewRepairToolCallError(_REPAIR_TOOL_CALLS_ERROR)
+
+        candidate = _review_candidate(assistant_message)
+        return validate_review(candidate, changed_filenames)
 
 
 def _assistant_tool_calls(
@@ -113,3 +144,12 @@ def _assistant_tool_calls(
     if type(tool_calls) not in (list, tuple):
         raise ValueError(_TOOL_CALLS_ERROR)
     return cast(tuple[Mapping[str, object], ...], tuple(tool_calls))
+
+
+def _review_candidate(
+    assistant_message: Mapping[str, object],
+) -> str:
+    candidate = assistant_message.get("content")
+    if type(candidate) is not str or not candidate.strip():
+        raise ReviewCandidateError(_REVIEW_CANDIDATE_ERROR)
+    return candidate

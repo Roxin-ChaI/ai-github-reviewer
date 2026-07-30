@@ -93,6 +93,21 @@ def build_user_message(
     }
 
 
+def build_review_repair_message() -> dict[str, object]:
+    return {
+        "role": "user",
+        "content": (
+            "Please only repair the Markdown format and structure of the preceding "
+            "review. Follow the six required headings from the existing system prompt "
+            "exactly and use the required finding field format exactly. Do not call "
+            "tools again. Do not add any new conclusions, facts, or issues that are "
+            "not supported by the existing Pull Request data and existing evidence. "
+            "Return the complete final review only, without explaining the repair "
+            "process."
+        ),
+    }
+
+
 def copy_assistant_message(
     message: Mapping[str, object],
 ) -> dict[str, object]:

@@ -755,23 +755,21 @@ def test_later_success_replaces_old_snapshot() -> None:
 
 
 def test_old_snapshot_filename_is_not_merged_with_latest_snapshot() -> None:
+    invalid_review = _review(filename="old.py")
+    repaired_review = _review(filename="new.py")
     agent, model_client, github_client = _agent(
         [
             _tool_response("old"),
             _tool_response("new"),
-            {"role": "assistant", "content": _review(filename="old.py")},
+            {"role": "assistant", "content": invalid_review},
+            {"role": "assistant", "content": repaired_review},
         ],
         [_result("old.py"), _result("new.py")],
     )
 
-    with pytest.raises(
-        ReviewValidationError,
-        match="^finding file does not match changed file$",
-    ):
-        agent.review()
-
-    assert len(model_client.requests) == 3
-    assert len(github_client.targets) == 2
+    assert agent.review() is repaired_review
+    assert len(model_client.requests) == 4
+    assert github_client.targets == [TARGET, TARGET]
 
 
 def test_last_result_in_multi_call_batch_is_latest_snapshot() -> None:
@@ -789,19 +787,20 @@ def test_last_result_in_multi_call_batch_is_latest_snapshot() -> None:
 
 
 def test_first_result_in_multi_call_batch_is_not_current_snapshot() -> None:
-    agent, _, _ = _agent(
+    invalid_review = _review(filename="first.py")
+    repaired_review = _review(filename="second.py")
+    agent, model_client, github_client = _agent(
         [
             _tool_response("first", "second"),
-            {"role": "assistant", "content": _review(filename="first.py")},
+            {"role": "assistant", "content": invalid_review},
+            {"role": "assistant", "content": repaired_review},
         ],
         [_result("first.py"), _result("second.py")],
     )
 
-    with pytest.raises(
-        ReviewValidationError,
-        match="^finding file does not match changed file$",
-    ):
-        agent.review()
+    assert agent.review() is repaired_review
+    assert len(model_client.requests) == 3
+    assert github_client.targets == [TARGET, TARGET]
 
 
 @pytest.mark.parametrize(
@@ -891,22 +890,146 @@ def test_later_target_mismatch_propagates_without_fallback() -> None:
         ),
     ],
 )
-def test_review_validation_errors_propagate_without_retry(
+def test_second_review_validation_error_propagates_without_additional_retry(
     candidate: str,
     message: str,
 ) -> None:
     candidate_before = deepcopy(candidate)
     agent, model_client, github_client = _agent(
-        [_tool_response("call"), {"role": "assistant", "content": candidate}],
+        [
+            _tool_response("call"),
+            {"role": "assistant", "content": candidate},
+            {"role": "assistant", "content": candidate},
+        ],
         [_result("file.py")],
     )
 
     with pytest.raises(ReviewValidationError, match=f"^{message}$"):
         agent.review()
 
-    assert len(model_client.requests) == 2
+    assert len(model_client.requests) == 3
+    assert model_client.responses == []
     assert len(github_client.targets) == 1
     assert candidate == candidate_before
+
+
+def test_invalid_review_is_repaired_once_without_refetching_github() -> None:
+    invalid_review = _review(filename="file.py").replace(
+        "## Summary",
+        "## Overview",
+    )
+    repaired_review = _review(filename="file.py")
+    agent, model_client, github_client = _agent(
+        [
+            _tool_response("call"),
+            {"role": "assistant", "content": invalid_review},
+            {"role": "assistant", "content": repaired_review},
+        ],
+        [_result("file.py")],
+    )
+
+    assert agent.review() is repaired_review
+    assert len(model_client.requests) == 3
+    assert github_client.targets == [TARGET]
+    assert _roles(model_client.requests[2]) == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+    ]
+
+    repair_history = model_client.requests[2]["messages"]
+    assert repair_history[-2] == {
+        "role": "assistant",
+        "content": invalid_review,
+    }
+    repair_message = repair_history[-1]
+    assert repair_message["role"] == "user"
+    repair_instruction = repair_message["content"]
+    assert type(repair_instruction) is str
+    assert "only repair the Markdown format" in repair_instruction
+    assert "six required headings" in repair_instruction
+    assert "finding field format" in repair_instruction
+    assert "Do not call tools again" in repair_instruction
+    assert "Do not add any new conclusions" in repair_instruction
+    assert "existing evidence" in repair_instruction
+    assert model_client.requests[2]["tools"] == [
+        get_pull_request_tool_schema(),
+    ]
+
+
+def test_repair_response_with_tool_calls_is_rejected_without_execution() -> None:
+    invalid_review = _review(filename="file.py").replace(
+        "## Summary",
+        "## Overview",
+    )
+    agent, model_client, github_client = _agent(
+        [
+            _tool_response("call"),
+            {"role": "assistant", "content": invalid_review},
+            _tool_response("repair_call"),
+        ],
+        [_result("file.py")],
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="^tool calls are not allowed during review repair$",
+    ):
+        agent.review()
+
+    assert len(model_client.requests) == 3
+    assert github_client.targets == [TARGET]
+    assert _roles(model_client.requests[2]) == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+    ]
+    assert model_client.requests[2]["tools"] == [
+        get_pull_request_tool_schema(),
+    ]
+
+
+def test_second_invalid_review_is_not_retried_again() -> None:
+    first_invalid_review = _review(filename="file.py").replace(
+        "## Summary",
+        "## Overview",
+    )
+    second_invalid_review = _review(
+        filename="file.py",
+        severity="Info",
+    )
+    agent, model_client, github_client = _agent(
+        [
+            _tool_response("call"),
+            {"role": "assistant", "content": first_invalid_review},
+            {"role": "assistant", "content": second_invalid_review},
+        ],
+        [_result("file.py")],
+    )
+
+    with pytest.raises(
+        ReviewValidationError,
+        match="^invalid finding severity$",
+    ):
+        agent.review()
+
+    assert len(model_client.requests) == 3
+    assert model_client.responses == []
+    assert github_client.targets == [TARGET]
+    assert _roles(model_client.requests[2]) == [
+        "system",
+        "user",
+        "assistant",
+        "tool",
+        "assistant",
+        "user",
+    ]
 
 
 def test_review_can_use_second_filename_from_latest_complete_result() -> None:
