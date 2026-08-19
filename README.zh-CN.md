@@ -7,6 +7,32 @@ public Python API。它使用 DeepSeek 的 OpenAI-compatible Chat Completions AP
 唯一严格的 `get_pull_request` 工具审查一个公开 GitHub Pull Request。CLI 输出校验
 后的 Markdown；Python API 返回同一 Markdown 与不可变的结构化结果。
 
+## v0.2.0
+
+v0.2.0 通过稳定的 public Python 集成边界，使现有 Review 核心可被复用。
+
+### 新增
+
+- `ReviewerConfig`、`ReviewerRunner` 与 `create_reviewer(...)`。
+- Typed `ReviewResult` 与 public Review DTO。
+- Public 分类异常契约。
+- 通过 `ReviewService` 实现依赖注入。
+- 明确且幂等的 `close()` 生命周期。
+
+### 安全边界
+
+- CLI 与 Public Runner 均保持匿名 GitHub REST GET-only。
+- 不接受也不支持 GitHub token。
+- 两种接口均不能 comment、提交 Review、approve、request changes，也不能修改仓库或
+  Pull Request。
+
+### 兼容性
+
+- 现有 CLI 及其行为保持可用。
+- v0.2.0 未把 CLI 迁移或替换为 Public Runner。
+- 两种接口复用现有 Review 核心；未来 Workbench 集成可以使用 typed result，无需
+  解析 Markdown。
+
 ## 主要特性
 
 - 严格解析标准 `github.com` Pull Request URL。
@@ -21,6 +47,10 @@ public Python API。它使用 DeepSeek 的 OpenAI-compatible Chat Completions AP
 - 提供最小 Docker 交付和 GitHub Actions CI。
 
 ## 只读与信任模型
+
+AI GitHub Reviewer 是只读工具。该边界同时适用于 CLI 与 Public Runner：两者仅接受
+公开 Pull Request，只发送匿名 GitHub REST GET 请求；均不接受 `GITHUB_TOKEN`，也
+不提供 GitHub 写操作。
 
 应用不会发布 GitHub Review、创建评论、合并或关闭 Pull Request，也不会以其他
 方式写入 GitHub。应用不接受 GitHub token。Pull Request 的 title、body、patch、
@@ -81,10 +111,25 @@ for finding in result.findings:
 print(result.markdown)
 ```
 
-`ReviewResult` 提供 authoritative target、Pull Request metadata、summary、有序
-findings、test gaps、maintainability、final assessment 与原始校验后 Markdown。
-每个 finding 提供 severity、file path、文本 location、issue、evidence 和
-recommendation；不会伪造行号、confidence、metrics、token usage 或 risk score。
+`ReviewerConfig` 必须提供 `deepseek_api_key`，默认值为
+`deepseek_base_url="https://api.deepseek.com"`、
+`deepseek_model="deepseek-v4-flash"`、
+`github_api_base_url="https://api.github.com"` 与 `max_tool_rounds=8`。
+
+`ReviewResult` 仅包含以下 public result 字段：
+
+- `target`
+- `pull_request`
+- `summary`
+- `findings`
+- `test_gaps`
+- `maintainability`
+- `assessment`
+- `markdown`
+
+每个 `ReviewFinding` 包含 `severity`、`file_path`、`location`、`issue`、`evidence` 与
+`recommendation`。API 不会伪造 confidence、metrics、token usage、数字 risk score、
+精确 diff position 或自动 comment ID。
 
 根包还导出稳定的配置、无效 Pull Request URL、GitHub retrieval、模型执行、Review
 protocol validation 与 close 后使用等异常类型。原始原因通过异常链保留，secret 不会
@@ -217,19 +262,19 @@ controlled Docker E2E harness。
 构建 release image：
 
 ```console
-docker build --tag ai-github-reviewer:0.1.0 .
+docker build --tag ai-github-reviewer:0.2.0 .
 ```
 
 检查容器 CLI：
 
 ```console
-docker run --rm ai-github-reviewer:0.1.0 --help
+docker run --rm ai-github-reviewer:0.2.0 --help
 ```
 
 审查一个公开 Pull Request：
 
 ```console
-docker run --rm --env-file .env ai-github-reviewer:0.1.0 https://github.com/OWNER/REPOSITORY/pull/NUMBER
+docker run --rm --env-file .env ai-github-reviewer:0.2.0 https://github.com/OWNER/REPOSITORY/pull/NUMBER
 ```
 
 Dockerfile 不复制 `.env`，image 中不嵌入 Secret。image 的默认入口是
@@ -269,11 +314,20 @@ workflow 不运行 controlled Docker E2E 或 live E2E。
 7. 检查输出中没有 API key。
 8. 检查 GitHub Pull Request 的 state、reviews 和 comments 均未变化。
 
-本次 Slice 10 尚未执行该 live E2E。
+v0.2.0 Public Runner 已由用户对公开 Pull Request
+`openai/openai-python#3357` 完成人工验证：
+
+- Public Runner Real E2E：PASS
+- ReviewResult：PASS
+- Structured finding：PASS（1 个 finding）
+- Assessment：`Approve with minor comments`
+- Validated Markdown：PASS
+- GitHub write：NONE
+- Lifecycle close：PASS
 
 ## 限制和范围外事项
 
-v0.1.0 不包含 private repositories；GitHub tokens、Apps 和 OAuth；自动发布
+v0.2.0 不包含 private repositories；GitHub tokens、Apps 和 OAuth；自动发布
 Review；comments；代码修改或 fix commit；merge 或 close；Web UI；streaming；
 retries；caching；background work；多个 Pull Requests；GitHub Enterprise；本地
 仓库分析；Pull Request 代码执行；RAG；persistent memory；MCP；multiple agents；
@@ -281,5 +335,5 @@ provider switching；multi-model comparison。
 
 ## 发布状态
 
-`v0.1.0` 是当前稳定 tag。该 tag 之后的 public runner 工作属于未来版本开发，本阶段
-不修改 package version。
+当前 package version 为 `0.2.0`，作为 reusable public Python API release 进行发布
+准备。tag、push 与 GitHub Release 属于后续独立发布操作。

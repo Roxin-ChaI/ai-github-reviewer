@@ -223,6 +223,7 @@ def test_root_package_exports_stable_public_api() -> None:
 
     assert set(ai_github_reviewer.__all__) == expected
     assert all(hasattr(ai_github_reviewer, name) for name in expected)
+    assert ai_github_reviewer.__version__ == "0.2.0"
 
 
 def test_reviewer_config_normalizes_values_and_uses_real_defaults() -> None:

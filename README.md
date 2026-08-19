@@ -8,6 +8,33 @@ DeepSeek's OpenAI-compatible Chat Completions API and one strict `get_pull_reque
 tool. The CLI prints the validated Markdown review; the Python API returns that same
 Markdown together with an immutable structured result.
 
+## v0.2.0
+
+v0.2.0 makes the existing review core reusable through a stable public Python
+integration boundary.
+
+### Added
+
+- `ReviewerConfig`, `ReviewerRunner`, and `create_reviewer(...)`.
+- Typed `ReviewResult` and public review DTOs.
+- Public categorized exceptions.
+- Dependency injection through `ReviewService`.
+- An explicit, idempotent `close()` lifecycle.
+
+### Safety
+
+- GitHub access remains anonymous REST GET-only for both the CLI and Public Runner.
+- GitHub tokens are not accepted or supported.
+- Neither interface can comment, submit a review, approve, request changes, or mutate
+  a repository or Pull Request.
+
+### Compatibility
+
+- The existing CLI remains available with its existing behavior.
+- v0.2.0 does not migrate or replace the CLI with the Public Runner.
+- Both interfaces reuse the existing review core; a future Workbench integration can
+  consume typed results rather than parsing Markdown.
+
 ## Key Features
 
 - Strict parsing of standard `github.com` Pull Request URLs.
@@ -22,6 +49,10 @@ Markdown together with an immutable structured result.
 - Minimal Docker delivery and GitHub Actions CI.
 
 ## Read-only and Trust Model
+
+AI GitHub Reviewer is read-only. This boundary applies equally to the CLI and Public
+Runner. Both accept only public Pull Requests and use anonymous GitHub REST GET
+requests; neither accepts `GITHUB_TOKEN` or exposes a GitHub write operation.
 
 The application does not publish a GitHub Review, create comments, merge or close a
 Pull Request, or perform any other GitHub write. It does not accept a GitHub token.
@@ -84,11 +115,25 @@ for finding in result.findings:
 print(result.markdown)
 ```
 
-`ReviewResult` exposes the authoritative target, Pull Request metadata, summary,
-ordered findings, test gaps, maintainability notes, final assessment, and the original
-validated Markdown. Each finding exposes severity, file path, textual location,
-issue, evidence, and recommendation. It does not fabricate line numbers, confidence,
-metrics, token usage, or risk scores.
+`ReviewerConfig` requires `deepseek_api_key`. Its defaults are
+`deepseek_base_url="https://api.deepseek.com"`,
+`deepseek_model="deepseek-v4-flash"`,
+`github_api_base_url="https://api.github.com"`, and `max_tool_rounds=8`.
+
+`ReviewResult` contains exactly these public result fields:
+
+- `target`
+- `pull_request`
+- `summary`
+- `findings`
+- `test_gaps`
+- `maintainability`
+- `assessment`
+- `markdown`
+
+Each `ReviewFinding` contains `severity`, `file_path`, `location`, `issue`, `evidence`,
+and `recommendation`. The API does not fabricate confidence, metrics, token usage,
+numeric risk scores, exact diff positions, or automated comment identifiers.
 
 The root package also exports stable public error categories for configuration,
 invalid Pull Request URLs, GitHub retrieval, model execution, review protocol
@@ -227,19 +272,19 @@ Docker E2E harness is not collected or run by default pytest.
 Build the release image:
 
 ```console
-docker build --tag ai-github-reviewer:0.1.0 .
+docker build --tag ai-github-reviewer:0.2.0 .
 ```
 
 Check the container CLI:
 
 ```console
-docker run --rm ai-github-reviewer:0.1.0 --help
+docker run --rm ai-github-reviewer:0.2.0 --help
 ```
 
 Run against one public Pull Request:
 
 ```console
-docker run --rm --env-file .env ai-github-reviewer:0.1.0 https://github.com/OWNER/REPOSITORY/pull/NUMBER
+docker run --rm --env-file .env ai-github-reviewer:0.2.0 https://github.com/OWNER/REPOSITORY/pull/NUMBER
 ```
 
 The Dockerfile does not copy `.env`, and no secret is embedded in the image. The
@@ -281,11 +326,20 @@ and the controlled E2E all pass:
 7. Confirm the output contains no API key.
 8. Confirm the GitHub Pull Request state, reviews, and comments are unchanged.
 
-This live E2E has not been executed as part of Slice 10.
+The v0.2.0 Public Runner was manually validated against public Pull Request
+`openai/openai-python#3357`:
+
+- Public Runner Real E2E: PASS
+- ReviewResult: PASS
+- Structured finding: PASS (1 finding)
+- Assessment: `Approve with minor comments`
+- Validated Markdown: PASS
+- GitHub write: NONE
+- Lifecycle close: PASS
 
 ## Limitations and Out of Scope
 
-The v0.1.0 scope excludes private repositories; GitHub tokens, Apps, and OAuth;
+The v0.2.0 scope excludes private repositories; GitHub tokens, Apps, and OAuth;
 automatic review publication; comments; code changes or fix commits; merge or close
 operations; a web UI; streaming; retries; caching; background work; multiple Pull
 Requests; GitHub Enterprise; local repository analysis; Pull Request code execution;
@@ -294,5 +348,5 @@ comparison.
 
 ## Release Status
 
-`v0.1.0` is the current stable tag. Public runner work after that tag is development
-work for a future release and does not change the package version in this phase.
+The package version is `0.2.0`, prepared as the reusable public Python API release.
+Tagging, pushing, and creating a GitHub Release are separate release operations.

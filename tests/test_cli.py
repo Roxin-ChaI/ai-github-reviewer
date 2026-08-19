@@ -145,7 +145,7 @@ def test_pyproject_metadata_and_single_console_script() -> None:
     data = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
 
     assert data["project"]["name"] == "ai-github-reviewer"
-    assert data["project"]["version"] == "0.1.0"
+    assert data["project"]["version"] == "0.2.0"
     assert data["project"]["requires-python"] == ">=3.12"
     assert data["project"]["scripts"] == {"ai-github-reviewer": "ai_github_reviewer.cli:main"}
     assert data["project"]["dependencies"] == [
