@@ -2,11 +2,11 @@
 
 English | [简体中文](README.zh-CN.md)
 
-AI GitHub Reviewer is a single-agent, read-only command-line application that reviews
-one public GitHub Pull Request. It uses DeepSeek's OpenAI-compatible Chat Completions
-API and exposes one strict `get_pull_request` tool. After retrieving real Pull Request
-data, it validates the model's Markdown review and writes only that final review to
-standard output.
+AI GitHub Reviewer is a single-agent, read-only reviewer with a command-line interface
+and a synchronous public Python API. It reviews one public GitHub Pull Request using
+DeepSeek's OpenAI-compatible Chat Completions API and one strict `get_pull_request`
+tool. The CLI prints the validated Markdown review; the Python API returns that same
+Markdown together with an immutable structured result.
 
 ## Key Features
 
@@ -16,6 +16,7 @@ standard output.
 - Complete Pull Request metadata and changed-file retrieval, including safe pagination.
 - A bounded Tool Calling loop with a configurable round limit.
 - Deterministic validation of the final Markdown review.
+- A typed public runner API with explicit configuration and lifecycle boundaries.
 - Final-only CLI output with no progress or debug text on success.
 - Network-isolated automated tests.
 - Minimal Docker delivery and GitHub Actions CI.
@@ -56,6 +57,47 @@ python -m pip install -e ".[dev]"
 ```
 
 No GitHub token is required or supported.
+
+## Public Python API
+
+The public API is synchronous and does not print the review. The runner owns its
+GitHub and model clients, so callers must close it:
+
+```python
+import os
+
+from ai_github_reviewer import ReviewerConfig, create_reviewer
+
+reviewer = create_reviewer(
+    ReviewerConfig(deepseek_api_key=os.environ["DEEPSEEK_API_KEY"])
+)
+try:
+    result = reviewer.review(
+        "https://github.com/OWNER/REPOSITORY/pull/NUMBER"
+    )
+finally:
+    reviewer.close()
+
+print(result.summary)
+for finding in result.findings:
+    print(finding.severity, finding.file_path, finding.location)
+print(result.markdown)
+```
+
+`ReviewResult` exposes the authoritative target, Pull Request metadata, summary,
+ordered findings, test gaps, maintainability notes, final assessment, and the original
+validated Markdown. Each finding exposes severity, file path, textual location,
+issue, evidence, and recommendation. It does not fabricate line numbers, confidence,
+metrics, token usage, or risk scores.
+
+The root package also exports stable public error categories for configuration,
+invalid Pull Request URLs, GitHub retrieval, model execution, review protocol
+validation, and use after close. Causes remain available through exception chaining;
+secrets are not copied into public error messages.
+
+The public factory preserves the same anonymous GitHub REST GET-only boundary as the
+CLI. It accepts no GitHub token and exposes no operation for comments, reviews,
+approval, requested changes, merges, or other GitHub writes.
 
 ## Configuration
 
@@ -252,6 +294,5 @@ comparison.
 
 ## Release Status
 
-The code is ready to enter v0.1.0 release validation. A remote, push, tag, or GitHub
-Release will be created only after separate explicit approval. This document does not
-claim that a v0.1.0 tag or GitHub Release already exists.
+`v0.1.0` is the current stable tag. Public runner work after that tag is development
+work for a future release and does not change the package version in this phase.

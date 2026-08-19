@@ -2,10 +2,10 @@
 
 [English](README.md) | 简体中文
 
-AI GitHub Reviewer 是一个单 Agent、只读的命令行应用，用于审查一个公开的
-GitHub Pull Request。它使用 DeepSeek 的 OpenAI-compatible Chat Completions API，
-并只提供一个严格的 `get_pull_request` 工具。取得真实 Pull Request 数据后，应用
-校验模型生成的 Markdown Review，并且只把最终 Review 输出到标准输出。
+AI GitHub Reviewer 是一个单 Agent、只读 Reviewer，同时提供命令行界面和同步的
+public Python API。它使用 DeepSeek 的 OpenAI-compatible Chat Completions API 与
+唯一严格的 `get_pull_request` 工具审查一个公开 GitHub Pull Request。CLI 输出校验
+后的 Markdown；Python API 返回同一 Markdown 与不可变的结构化结果。
 
 ## 主要特性
 
@@ -15,6 +15,7 @@ GitHub Pull Request。它使用 DeepSeek 的 OpenAI-compatible Chat Completions 
 - 完整取得 Pull Request metadata 和 changed files，并安全处理分页。
 - 有明确上限且可配置的 Tool Calling 循环。
 - 确定性的最终 Markdown Review 校验。
+- 提供具有明确配置和生命周期边界的 typed public runner API。
 - CLI 成功时只输出最终结果，不输出进度或调试文本。
 - 自动化测试具有全局网络隔离。
 - 提供最小 Docker 交付和 GitHub Actions CI。
@@ -53,6 +54,44 @@ python -m pip install -e ".[dev]"
 ```
 
 不需要也不支持 GitHub token。
+
+## Public Python API
+
+Public API 是同步接口且不会打印 Review。Runner 持有 GitHub 与模型 client，调用方
+必须关闭它：
+
+```python
+import os
+
+from ai_github_reviewer import ReviewerConfig, create_reviewer
+
+reviewer = create_reviewer(
+    ReviewerConfig(deepseek_api_key=os.environ["DEEPSEEK_API_KEY"])
+)
+try:
+    result = reviewer.review(
+        "https://github.com/OWNER/REPOSITORY/pull/NUMBER"
+    )
+finally:
+    reviewer.close()
+
+print(result.summary)
+for finding in result.findings:
+    print(finding.severity, finding.file_path, finding.location)
+print(result.markdown)
+```
+
+`ReviewResult` 提供 authoritative target、Pull Request metadata、summary、有序
+findings、test gaps、maintainability、final assessment 与原始校验后 Markdown。
+每个 finding 提供 severity、file path、文本 location、issue、evidence 和
+recommendation；不会伪造行号、confidence、metrics、token usage 或 risk score。
+
+根包还导出稳定的配置、无效 Pull Request URL、GitHub retrieval、模型执行、Review
+protocol validation 与 close 后使用等异常类型。原始原因通过异常链保留，secret 不会
+复制到 public error message。
+
+Public factory 保持与 CLI 相同的匿名 GitHub REST GET-only 边界。它不接受 GitHub
+token，也不提供 comment、review、approve、request changes、merge 或其他写操作。
 
 ## 配置
 
@@ -242,5 +281,5 @@ provider switching；multi-model comparison。
 
 ## 发布状态
 
-当前代码已准备进入 v0.1.0 release validation。remote、push、tag 或 GitHub Release
-只会在另行明确批准后执行。本文档不声称 v0.1.0 tag 或 GitHub Release 已存在。
+`v0.1.0` 是当前稳定 tag。该 tag 之后的 public runner 工作属于未来版本开发，本阶段
+不修改 package version。
