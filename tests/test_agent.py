@@ -483,7 +483,7 @@ def test_final_response_before_tool_result_uses_prerequisite_error(
         validate_calls += 1
         raise AssertionError("review validation must not run")
 
-    monkeypatch.setattr(agent_module, "validate_review", fail_validate)
+    monkeypatch.setattr(agent_module, "validate_and_parse_review", fail_validate)
     agent, model_client, github_client = _agent(
         [{"role": "assistant", "content": content}],
     )
@@ -821,7 +821,7 @@ def test_later_github_failure_propagates_without_snapshot_fallback(
         validate_calls += 1
         raise AssertionError("review validation must not run")
 
-    monkeypatch.setattr(agent_module, "validate_review", fail_validate)
+    monkeypatch.setattr(agent_module, "validate_and_parse_review", fail_validate)
     agent, model_client, github_client = _agent(
         [_tool_response("old"), _tool_response("failed")],
         [_result("old.py"), controlled_error],

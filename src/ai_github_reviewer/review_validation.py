@@ -1,6 +1,13 @@
 import re
 from collections.abc import Iterable
-from typing import Final
+from dataclasses import dataclass
+from typing import Final, cast
+
+from ai_github_reviewer.review_result import (
+    ReviewAssessment,
+    ReviewFinding,
+    ReviewSeverity,
+)
 
 REQUIRED_HEADINGS: Final = (
     "# Pull Request Review",
@@ -58,10 +65,28 @@ class ReviewValidationError(ValueError):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class ValidatedReview:
+    summary: str
+    findings: tuple[ReviewFinding, ...]
+    test_gaps: str
+    maintainability: str
+    assessment: ReviewAssessment
+    markdown: str
+
+
 def validate_review(
     candidate: str,
     changed_filenames: Iterable[str],
 ) -> str:
+    validate_and_parse_review(candidate, changed_filenames)
+    return candidate
+
+
+def validate_and_parse_review(
+    candidate: str,
+    changed_filenames: Iterable[str],
+) -> ValidatedReview:
     if type(candidate) is not str or not candidate.strip():
         raise ReviewValidationError(_CANDIDATE_ERROR)
 
@@ -92,9 +117,16 @@ def validate_review(
         if not "\n".join(section_lines).strip():
             raise ReviewValidationError(_SECTION_ERROR)
 
-    _validate_findings(findings_lines, filenames)
-    _validate_final_assessment(final_assessment_lines)
-    return candidate
+    findings = _validate_findings(findings_lines, filenames)
+    assessment = _validate_final_assessment(final_assessment_lines)
+    return ValidatedReview(
+        summary=_section_text(summary_lines),
+        findings=findings,
+        test_gaps=_section_text(test_gaps_lines),
+        maintainability=_section_text(maintainability_lines),
+        assessment=assessment,
+        markdown=candidate,
+    )
 
 
 def _collect_changed_filenames(
@@ -158,7 +190,7 @@ def _heading_level(line: str) -> int | None:
 def _validate_findings(
     lines: list[str],
     changed_filenames: frozenset[str],
-) -> None:
+) -> tuple[ReviewFinding, ...]:
     if any(_MALFORMED_DEEP_FINDING_HEADING_PATTERN.fullmatch(line) for line in lines):
         raise ReviewValidationError(_FINDING_HEADINGS_ERROR)
 
@@ -166,13 +198,14 @@ def _validate_findings(
     if not heading_positions:
         if "\n".join(lines).strip() != NO_ACTIONABLE_ISSUES:
             raise ReviewValidationError(_NO_FINDINGS_ERROR)
-        return
+        return ()
 
     if NO_ACTIONABLE_ISSUES in lines:
         raise ReviewValidationError(_FINDING_HEADINGS_ERROR)
     if any(line.strip() for line in lines[: heading_positions[0]]):
         raise ReviewValidationError(_FINDING_FIELDS_ERROR)
 
+    findings: list[ReviewFinding] = []
     for expected_number, position in enumerate(heading_positions, start=1):
         match = _FINDING_HEADING_PATTERN.fullmatch(lines[position])
         if match is None or int(match.group(1)) != expected_number:
@@ -183,16 +216,19 @@ def _validate_findings(
             if expected_number < len(heading_positions)
             else len(lines)
         )
-        _validate_finding_fields(
-            lines[position + 1 : next_position],
-            changed_filenames,
+        findings.append(
+            _validate_finding_fields(
+                lines[position + 1 : next_position],
+                changed_filenames,
+            )
         )
+    return tuple(findings)
 
 
 def _validate_finding_fields(
     lines: list[str],
     changed_filenames: frozenset[str],
-) -> None:
+) -> ReviewFinding:
     if not lines or lines[0].strip():
         raise ReviewValidationError(_FINDING_FIELDS_ERROR)
 
@@ -219,8 +255,22 @@ def _validate_finding_fields(
         if not values[label].strip():
             raise ReviewValidationError(_FINDING_FIELDS_ERROR)
 
+    return ReviewFinding(
+        severity=cast(ReviewSeverity, severity),
+        file_path=filename,
+        location=values["Location"],
+        issue=values["Issue"],
+        evidence=values["Evidence"],
+        recommendation=values["Recommendation"],
+    )
 
-def _validate_final_assessment(lines: list[str]) -> None:
+
+def _validate_final_assessment(lines: list[str]) -> ReviewAssessment:
     assessment = "\n".join(lines).strip()
     if assessment not in ALLOWED_FINAL_ASSESSMENTS:
         raise ReviewValidationError(_ASSESSMENT_ERROR)
+    return cast(ReviewAssessment, assessment)
+
+
+def _section_text(lines: list[str]) -> str:
+    return "\n".join(lines).strip()

@@ -3,7 +3,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from typing import Final
 
-from ai_github_reviewer.github_client import GitHubClient
+from ai_github_reviewer._protocols import GitHubReader
 from ai_github_reviewer.pull_request import PullRequestData, PullRequestTarget
 from ai_github_reviewer.tool_schema import GET_PULL_REQUEST_TOOL_NAME
 
@@ -107,7 +107,7 @@ def parse_tool_calls(
 def execute_tool_calls(
     tool_calls: Iterable[Mapping[str, object]],
     authoritative_target: PullRequestTarget,
-    github_client: GitHubClient,
+    github_client: GitHubReader,
 ) -> tuple[ExecutedToolCall, ...]:
     parsed_calls = parse_tool_calls(tool_calls, authoritative_target)
     executions: list[ExecutedToolCall] = []

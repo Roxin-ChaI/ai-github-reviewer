@@ -57,3 +57,6 @@ class DeepSeekModelClient:
         else:
             raise TypeError("assistant message must be a mapping or support model_dump")
         return copy_assistant_message(message_mapping)
+
+    def close(self) -> None:
+        self._client.close()

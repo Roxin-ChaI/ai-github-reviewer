@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from typing import Final, cast
 
-from ai_github_reviewer.github_client import GitHubClient
+from ai_github_reviewer._protocols import GitHubReader, ReviewModel
 from ai_github_reviewer.messages import (
     build_review_repair_message,
     build_system_message,
@@ -9,9 +9,17 @@ from ai_github_reviewer.messages import (
     build_user_message,
     copy_assistant_message,
 )
-from ai_github_reviewer.model_client import DeepSeekModelClient
 from ai_github_reviewer.pull_request import PullRequestData, PullRequestTarget
-from ai_github_reviewer.review_validation import ReviewValidationError, validate_review
+from ai_github_reviewer.review_result import (
+    PullRequestInfo,
+    PullRequestTargetInfo,
+    ReviewResult,
+)
+from ai_github_reviewer.review_validation import (
+    ReviewValidationError,
+    ValidatedReview,
+    validate_and_parse_review,
+)
 from ai_github_reviewer.tool_calls import execute_tool_calls
 from ai_github_reviewer.tool_schema import get_pull_request_tool_schema
 
@@ -49,8 +57,8 @@ class PullRequestReviewAgent:
         self,
         *,
         target: PullRequestTarget,
-        github_client: GitHubClient,
-        model_client: DeepSeekModelClient,
+        github_client: GitHubReader,
+        model_client: ReviewModel,
         max_tool_rounds: int = DEFAULT_MAX_TOOL_ROUNDS,
     ) -> None:
         if type(target) is not PullRequestTarget:
@@ -64,6 +72,9 @@ class PullRequestReviewAgent:
         self._max_tool_rounds = max_tool_rounds
 
     def review(self) -> str:
+        return self.review_result().markdown
+
+    def review_result(self) -> ReviewResult:
         history = [
             build_system_message(),
             build_user_message(self._target),
@@ -105,20 +116,27 @@ class PullRequestReviewAgent:
             )
             candidate = _review_candidate(assistant_message)
             try:
-                return validate_review(candidate, changed_filenames)
+                validated = validate_and_parse_review(candidate, changed_filenames)
             except ReviewValidationError:
                 return self._repair_review(
                     history,
                     assistant_message,
                     changed_filenames,
+                    current_result_snapshot,
                 )
+            return _build_review_result(
+                self._target,
+                current_result_snapshot,
+                validated,
+            )
 
     def _repair_review(
         self,
         history: list[dict[str, object]],
         invalid_assistant_message: dict[str, object],
         changed_filenames: tuple[str, ...],
-    ) -> str:
+        result_snapshot: PullRequestData,
+    ) -> ReviewResult:
         history.append(invalid_assistant_message)
         history.append(build_review_repair_message())
         response = self._model_client.complete(
@@ -132,7 +150,12 @@ class PullRequestReviewAgent:
             raise ReviewRepairToolCallError(_REPAIR_TOOL_CALLS_ERROR)
 
         candidate = _review_candidate(assistant_message)
-        return validate_review(candidate, changed_filenames)
+        validated = validate_and_parse_review(candidate, changed_filenames)
+        return _build_review_result(
+            self._target,
+            result_snapshot,
+            validated,
+        )
 
 
 def _assistant_tool_calls(
@@ -143,7 +166,8 @@ def _assistant_tool_calls(
         return ()
     if type(tool_calls) not in (list, tuple):
         raise ValueError(_TOOL_CALLS_ERROR)
-    return cast(tuple[Mapping[str, object], ...], tuple(tool_calls))
+    collection = cast(list[object] | tuple[object, ...], tool_calls)
+    return cast(tuple[Mapping[str, object], ...], tuple(collection))
 
 
 def _review_candidate(
@@ -153,3 +177,38 @@ def _review_candidate(
     if type(candidate) is not str or not candidate.strip():
         raise ReviewCandidateError(_REVIEW_CANDIDATE_ERROR)
     return candidate
+
+
+def _build_review_result(
+    target: PullRequestTarget,
+    snapshot: PullRequestData,
+    validated: ValidatedReview,
+) -> ReviewResult:
+    metadata = snapshot.metadata
+    return ReviewResult(
+        target=PullRequestTargetInfo(
+            owner=target.owner,
+            repository=target.repository,
+            pull_number=target.pull_number,
+        ),
+        pull_request=PullRequestInfo(
+            title=metadata.title,
+            body=metadata.body,
+            state=metadata.state,
+            author=metadata.author,
+            base_branch=metadata.base_branch,
+            head_branch=metadata.head_branch,
+            created_at=metadata.created_at,
+            updated_at=metadata.updated_at,
+            changed_files=metadata.changed_files,
+            additions=metadata.additions,
+            deletions=metadata.deletions,
+            commits=metadata.commits,
+        ),
+        summary=validated.summary,
+        findings=validated.findings,
+        test_gaps=validated.test_gaps,
+        maintainability=validated.maintainability,
+        assessment=validated.assessment,
+        markdown=validated.markdown,
+    )
